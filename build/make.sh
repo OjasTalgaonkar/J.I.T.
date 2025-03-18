@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Set the paths to the Npcap Include and Lib directories
-NPCAP_INCLUDE_DIR="C:/Program Files/Npcap/npcap-sdk-1.15/Include"
-NPCAP_LIB_DIR="C:/Program Files/Npcap/npcap-sdk-1.15/lib"
+NPCAP_INCLUDE_DIR="lib/npcap-sdk-1.15/Include"
+NPCAP_LIB_DIR="lib/npcap-sdk-1.15/lib"
 
 
 GCC_PATH="gcc"  
