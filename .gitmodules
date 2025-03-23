@@ -1,0 +1,3 @@
+[submodule "lib/npcap-sdk"]
+	path = lib/npcap-sdk
+	url = https://github.com/OjasTalgaonkar/npcap-sdk.git

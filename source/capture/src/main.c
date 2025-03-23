@@ -1,4 +1,4 @@
-#include <C:/Program Files/Npcap/npcap-sdk-1.15/Include/pcap.h>
+#include <pcap.h>
 #include <stdio.h>
 
 void packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
@@ -9,18 +9,25 @@ void packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
 int main() {
   pcap_t *handle;
   char errbuf[PCAP_ERRBUF_SIZE];
-  const char *dev;
+  pcap_if_t *alldevs, *dev;
 
-  dev = pcap_lookupdev(errbuf);
-  if (dev == NULL) {
-    printf("Error finding device: %s\n", errbuf);
+  // Find all available network devices
+  if (pcap_findalldevs(&alldevs, errbuf) == -1) {
+    printf("Error finding devices: %s\n", errbuf);
     return 1;
   }
 
-  printf("Using device: %s\n", dev);
+  // Select the first device
+  dev = alldevs;
+  if (!dev) {
+    printf("No devices found.\n");
+    return 1;
+  }
+
+  printf("Using device: %s\n", dev->name);
 
   // Open the device for capturing packets
-  handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
+  handle = pcap_open_live(dev->name, BUFSIZ, 1, 1000, errbuf);
   if (handle == NULL) {
     printf("Error opening device: %s\n", errbuf);
     return 1;
@@ -33,8 +40,9 @@ int main() {
     return 1;
   }
 
-  // Close the capture handle
+  // Clean up
   pcap_close(handle);
+  pcap_freealldevs(alldevs);
 
   return 0;
 }

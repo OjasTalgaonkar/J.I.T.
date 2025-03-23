@@ -5,10 +5,10 @@ NPCAP_INCLUDE_DIR="lib/npcap-sdk-1.15/Include"
 NPCAP_LIB_DIR="lib/npcap-sdk-1.15/lib"
 
 
-GCC_PATH="gcc"  
+GCC_PATH="x86_64-w64-mingw32-gcc"
 
 
-SOURCE_FILE="source/lib/src/main.c"  
+SOURCE_FILE="source/capture/src/main.c"  
 OUTPUT_FILE="build/packet_sniffer.exe"  
 
 
