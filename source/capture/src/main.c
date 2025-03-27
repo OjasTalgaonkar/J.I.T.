@@ -4,7 +4,7 @@
 #include <windows.h>
 #include <winsock2.h>
 
-#define SHM_NAME "SharedMemory"
+#define SHM_NAME "JIT_CORE_OPEN_MEM"
 #define SHM_SIZE 16384
 #define QUEUE_SIZE 30
 #define PACKET_SIZE 512
@@ -14,9 +14,34 @@ typedef struct {
   char *shared_mem;
 } SharedMemory;
 
+typedef struct {
+  int head;
+  int tail;
+  int count;
+  char packets[QUEUE_SIZE][PACKET_SIZE];
+  HANDLE mutex;
+} SharedQueue;
+
+void enqueue_packets(SharedQueue *queue, const char *data, int len) {
+  WaitForSingleObject(queue->mutex, INFINITE);
+  if (queue->count < QUEUE_SIZE) {
+    snprintf(queue->packets[queue->tail], PACKET_SIZE, "Packet: %.*s", len,
+             data);
+    queue->tail = (queue->tail + 1) % QUEUE_SIZE;
+    queue->count++;
+    printf("Enqueued packet at %d, count: %d\n", queue->tail, queue->count);
+  } else {
+    printf("Queue is full, dropping packet.\n");
+  }
+}
+
 void packet_handler(u_char *user, const struct pcap_pkthdr *pkthdr,
                     const u_char *packet) {
-  SharedMemory *shm = (SharedMemory *)user;
+  SharedQueue *queue = (SharedQueue *)user;
+
+  if (queue) {
+    enqueue_packets(queue, (const char *)packet, pkthdr->len);
+  }
 }
 
 int main() {
@@ -25,21 +50,26 @@ int main() {
   char errbuf[PCAP_ERRBUF_SIZE];
   int i = 0, choice;
 
-  SharedMemory shm;
-  shm.hMapFile = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
-                                   0, SHM_SIZE, SHM_NAME);
-  if (shm.hMapFile == NULL) {
+  // Create shared memory
+  HANDLE hMapFile = CreateFileMapping(INVALID_HANDLE_VALUE, NULL,
+                                      PAGE_READWRITE, 0, SHM_SIZE, SHM_NAME);
+  if (hMapFile == NULL) {
     printf("CreateFileMapping failed (%lu)\n", GetLastError());
     return 1;
   }
 
-  shm.shared_mem =
-      (char *)MapViewOfFile(shm.hMapFile, FILE_MAP_ALL_ACCESS, 0, 0, SHM_SIZE);
-  if (shm.shared_mem == NULL) {
+  SharedQueue *queue = (SharedQueue *)MapViewOfFile(
+      hMapFile, FILE_MAP_ALL_ACCESS, 0, 0, SHM_SIZE);
+  if (queue == NULL) {
     printf("MapViewOfFile failed (%lu)\n", GetLastError());
-    CloseHandle(shm.hMapFile);
+    CloseHandle(hMapFile);
     return 1;
   }
+
+  queue->head = 0;
+  queue->tail = 0;
+  queue->count = 0;
+  queue->mutex = CreateMutex(NULL, FALSE, NULL);
 
   // Find all available network adapters
   if (pcap_findalldevs(&alldevs, errbuf) == -1) {
@@ -79,8 +109,10 @@ int main() {
   }
 
   printf("Capturing packets... Press Ctrl+C to stop.\n");
-  pcap_loop(handle, 0, packet_handler, (u_char *)&shm);
+  pcap_loop(handle, 0, &packet_handler, (u_char *)queue);
 
   pcap_freealldevs(alldevs);
+  UnmapViewOfFile(queue);
+  CloseHandle(hMapFile);
   return 0;
 }
