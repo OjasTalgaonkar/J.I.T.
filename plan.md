@@ -16,7 +16,7 @@
 
 ### Phase 3: Integration
 
-- [ ] C to Go link
+- [x] C to Go link
 - [ ] Go to Python link
 - [ ] Test flow
 

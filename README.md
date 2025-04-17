@@ -13,19 +13,25 @@
    ```bash
    git clone https://github.com/OjasTalgaonkar/J.I.T.
    ```
-2. Download Npcap to use with JIT
+2. [Install Npcap](#npcap-installation)
 
-## Npcap Installation Guide (Without SDK):
-
-Npcap is required for packet capture functionality. Follow these steps to install Npcap without the SDK:
-
-1. Download Npcap from the official website: [Npcap Download](https://nmap.org/npcap/).
-2. Run the installer and ensure that the option for "Install Npcap in WinPcap API-compatible Mode" is checked.
-3. During installation, uncheck the "Install Npcap SDK" option.
-4. Complete the installation process.
-
-Once installed, Npcap will be ready for use with J.I.T. for network packet analysis.
+3. Run this command in the terminal
+   ```bash
+   build/make.sh
+   ```
+   to compile the executables and run them.
 
 ## Contributing
 
 Feel free to fork the repository and contribute. Contributions are welcome, and suggestions for improving the tool are highly encouraged.
+
+<details id="npcap-installation"> <summary><strong>Npcap Installation Guide (Without SDK)</strong></summary>
+Npcap is required for packet capture functionality. Follow these steps to install Npcap without the SDK:
+
+Download Npcap from the official website: Npcap Download.
+Run the installer and ensure that the option for "Install Npcap in WinPcap API-compatible Mode" is checked.
+During installation, uncheck the "Install Npcap SDK" option.
+Complete the installation process.
+Once installed, Npcap will be ready for use with J.I.T. for network packet analysis.
+
+</details>
