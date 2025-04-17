@@ -1,4 +1,5 @@
 #include <pcap.h>
+#include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <windows.h>
@@ -8,22 +9,20 @@
 #define SHM_SIZE 16384
 #define QUEUE_SIZE 30
 #define PACKET_SIZE 512
-
-typedef struct {
-  HANDLE hMapFile;
-  char *shared_mem;
-} SharedMemory;
+#define SEM_PROD "Global\\SemProd"
+#define SEM_CONS "Global\\SemCons"
 
 typedef struct {
   int head;
   int tail;
   int count;
   char packets[QUEUE_SIZE][PACKET_SIZE];
-  HANDLE mutex;
+  int shutdown; // Shutdown flag for Go program
 } SharedQueue;
 
-void enqueue_packets(SharedQueue *queue, const char *data, int len) {
-  WaitForSingleObject(queue->mutex, INFINITE);
+void enqueue_packets(SharedQueue *queue, const char *data, int len,
+                     HANDLE sem_prod, HANDLE sem_cons) {
+  WaitForSingleObject(sem_prod, INFINITE); // Wait for empty slot
   if (queue->count < QUEUE_SIZE) {
     snprintf(queue->packets[queue->tail], PACKET_SIZE, "Packet: %.*s", len,
              data);
@@ -33,15 +32,15 @@ void enqueue_packets(SharedQueue *queue, const char *data, int len) {
   } else {
     printf("Queue is full, dropping packet.\n");
   }
+  ReleaseSemaphore(sem_cons, 1, NULL); // Signal consumer
 }
 
 void packet_handler(u_char *user, const struct pcap_pkthdr *pkthdr,
                     const u_char *packet) {
   SharedQueue *queue = (SharedQueue *)user;
-
-  if (queue) {
-    enqueue_packets(queue, (const char *)packet, pkthdr->len);
-  }
+  HANDLE *semaphores = (HANDLE *)(queue + 1); // Semaphores stored after queue
+  enqueue_packets(queue, (const char *)packet, pkthdr->len, semaphores[0],
+                  semaphores[1]);
 }
 
 int main() {
@@ -69,11 +68,38 @@ int main() {
   queue->head = 0;
   queue->tail = 0;
   queue->count = 0;
-  queue->mutex = CreateMutex(NULL, FALSE, NULL);
+  queue->shutdown = 0;
+
+  HANDLE sem_prod =
+      CreateSemaphore(NULL, QUEUE_SIZE, QUEUE_SIZE, TEXT(SEM_PROD));
+  if (sem_prod == NULL) {
+    printf("CreateSemaphore (SemProd) failed (%lu)\n", GetLastError());
+    UnmapViewOfFile(queue);
+    CloseHandle(hMapFile);
+    return 1;
+  }
+
+  HANDLE sem_cons = CreateSemaphore(NULL, 0, QUEUE_SIZE, TEXT(SEM_CONS));
+  if (sem_cons == NULL) {
+    printf("CreateSemaphore (SemCons) failed (%lu)\n", GetLastError());
+    CloseHandle(sem_prod);
+    UnmapViewOfFile(queue);
+    CloseHandle(hMapFile);
+    return 1;
+  }
+
+  // Store semaphores in shared memory (after queue)
+  HANDLE *semaphores = (HANDLE *)(queue + 1);
+  semaphores[0] = sem_prod;
+  semaphores[1] = sem_cons;
 
   // Find all available network adapters
   if (pcap_findalldevs(&alldevs, errbuf) == -1) {
     printf("Error finding devices: %s\n", errbuf);
+    CloseHandle(sem_prod);
+    CloseHandle(sem_cons);
+    UnmapViewOfFile(queue);
+    CloseHandle(hMapFile);
     return 1;
   }
 
@@ -88,6 +114,10 @@ int main() {
   if (i == 0) {
     printf("No interfaces found.\n");
     pcap_freealldevs(alldevs);
+    CloseHandle(sem_prod);
+    CloseHandle(sem_cons);
+    UnmapViewOfFile(queue);
+    CloseHandle(hMapFile);
     return 1;
   }
 
@@ -95,23 +125,66 @@ int main() {
   printf("Select an interface (1-%d): ", i);
   scanf("%d", &choice);
 
+  // Validate choice
+  if (choice < 1 || choice > i) {
+    printf("Invalid choice.\n");
+    pcap_freealldevs(alldevs);
+    CloseHandle(sem_prod);
+    CloseHandle(sem_cons);
+    UnmapViewOfFile(queue);
+    CloseHandle(hMapFile);
+    return 1;
+  }
+
   dev = alldevs;
-  for (i = 1; i < choice && choice < 10; i++)
+  for (i = 1; i < choice; i++)
     dev = dev->next;
 
   printf("Using device: %s\n", dev->name);
+
+  // Launch the Go program after semaphores are created
+  SHELLEXECUTEINFO sei = {0};
+  sei.cbSize = sizeof(SHELLEXECUTEINFO);
+  sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+  sei.lpVerb = TEXT("open");
+  sei.lpFile = TEXT("build\\packet_processor.exe");
+  sei.lpDirectory = NULL;
+  sei.nShow = SW_SHOWNORMAL; // Open in a new console window to see Go output
+
+  if (!ShellExecuteEx(&sei)) {
+    printf("Failed to launch Go program (%lu)\n", GetLastError());
+    pcap_freealldevs(alldevs);
+    CloseHandle(sem_prod);
+    CloseHandle(sem_cons);
+    UnmapViewOfFile(queue);
+    CloseHandle(hMapFile);
+    return 1;
+  }
+  printf("Launched Go program (packet_processor.exe)\n");
 
   handle = pcap_open_live(dev->name, BUFSIZ, 1, 1000, errbuf);
   if (handle == NULL) {
     printf("Error opening device: %s\n", errbuf);
     pcap_freealldevs(alldevs);
+    CloseHandle(sem_prod);
+    CloseHandle(sem_cons);
+    UnmapViewOfFile(queue);
+    CloseHandle(hMapFile);
     return 1;
   }
 
   printf("Capturing packets... Press Ctrl+C to stop.\n");
   pcap_loop(handle, 0, &packet_handler, (u_char *)queue);
 
+  queue->shutdown = 1;                 // Signal Go program to exit
+  ReleaseSemaphore(sem_cons, 1, NULL); // Wake up Go program to check shutdown
+  Sleep(1000);
+
+  // end handlers
+  pcap_close(handle);
   pcap_freealldevs(alldevs);
+  CloseHandle(sem_prod);
+  CloseHandle(sem_cons);
   UnmapViewOfFile(queue);
   CloseHandle(hMapFile);
   return 0;
