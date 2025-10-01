@@ -6,7 +6,7 @@
 #include <winsock2.h>
 
 #define SHM_NAME "JIT_CORE_OPEN_MEM"
-#define SHM_SIZE 16384
+#define SHM_SIZE 65536
 #define QUEUE_SIZE 30
 #define PACKET_SIZE 512
 #define SEM_PROD "Global\\SemProd"
@@ -16,22 +16,29 @@ typedef struct {
   int head;
   int tail;
   int count;
-  char packets[QUEUE_SIZE][PACKET_SIZE];
-  int shutdown; // Shutdown flag for Go program
+  int lengths[QUEUE_SIZE];               // NEW: to store each packet's length
+  char packets[QUEUE_SIZE][PACKET_SIZE]; // Raw packet data
+  int shutdown;
 } SharedQueue;
 
 void enqueue_packets(SharedQueue *queue, const char *data, int len,
                      HANDLE sem_prod, HANDLE sem_cons) {
   WaitForSingleObject(sem_prod, INFINITE); // Wait for empty slot
+
   if (queue->count < QUEUE_SIZE) {
-    snprintf(queue->packets[queue->tail], PACKET_SIZE, "Packet: %.*s", len,
-             data);
+    int index = queue->tail;
+    int copy_len = len > PACKET_SIZE ? PACKET_SIZE : len;
+
+    memcpy(queue->packets[index], data, copy_len); // Store raw data
+    queue->lengths[index] = copy_len;              // Store real length
     queue->tail = (queue->tail + 1) % QUEUE_SIZE;
     queue->count++;
-    printf("Enqueued packet at %d, count: %d\n", queue->tail, queue->count);
+    printf("Enqueued packet at %d, length: %d, count: %d\n", index, copy_len,
+           queue->count);
   } else {
     printf("Queue is full, dropping packet.\n");
   }
+
   ReleaseSemaphore(sem_cons, 1, NULL); // Signal consumer
 }
 
@@ -121,11 +128,9 @@ int main() {
     return 1;
   }
 
-  // Get user selection
   printf("Select an interface (1-%d): ", i);
   scanf("%d", &choice);
 
-  // Validate choice
   if (choice < 1 || choice > i) {
     printf("Invalid choice.\n");
     pcap_freealldevs(alldevs);
@@ -142,14 +147,13 @@ int main() {
 
   printf("Using device: %s\n", dev->name);
 
-  // Launch the Go program after semaphores are created
   SHELLEXECUTEINFO sei = {0};
   sei.cbSize = sizeof(SHELLEXECUTEINFO);
   sei.fMask = SEE_MASK_NOCLOSEPROCESS;
   sei.lpVerb = TEXT("open");
   sei.lpFile = TEXT("build\\packet_processor.exe");
   sei.lpDirectory = NULL;
-  sei.nShow = SW_SHOWNORMAL; // Open in a new console window to see Go output
+  sei.nShow = SW_SHOWNORMAL;
 
   if (!ShellExecuteEx(&sei)) {
     printf("Failed to launch Go program (%lu)\n", GetLastError());
@@ -176,11 +180,10 @@ int main() {
   printf("Capturing packets... Press Ctrl+C to stop.\n");
   pcap_loop(handle, 0, &packet_handler, (u_char *)queue);
 
-  queue->shutdown = 1;                 // Signal Go program to exit
-  ReleaseSemaphore(sem_cons, 1, NULL); // Wake up Go program to check shutdown
+  queue->shutdown = 1;
+  ReleaseSemaphore(sem_cons, 1, NULL);
   Sleep(1000);
 
-  // end handlers
   pcap_close(handle);
   pcap_freealldevs(alldevs);
   CloseHandle(sem_prod);
